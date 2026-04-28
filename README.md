@@ -1,6 +1,6 @@
 # HAB dynamics in the Beagle Channel
 
-[![DOI](https://zenodo.org/badge/347462962.svg)](https://zenodo.org/badge/latestdoi/347462962)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19863797.svg)](https://doi.org/10.5281/zenodo.19863797)
 
 * Data an R code for the GAM model of the paper 
 
