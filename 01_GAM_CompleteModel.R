@@ -1,0 +1,214 @@
+#
+# Data analysis
+#
+library(GGally)
+library(tidyverse)
+
+TablaTOT <- readRDS("Data/TablaTOT.rds") %>% select( -(sunrise:HL_minutes)) %>% mutate(Wmean=as.numeric(Wmean))
+
+str(TablaTOT)
+d <- TablaTOT %>% filter(Area == "BE") ##!is.na(Acatenella))
+
+# Vista más completa: fechas + todas las variables
+d %>% group_by(Date) %>% 
+  summarise(n = n(), .groups = "drop") %>% 
+  filter(n > 1)
+
+# No hay fechas duplicadas!!!!
+
+
+# Resumen de NAs por variable
+d %>% summarise(across(everything(), ~sum(is.na(.)))) %>% 
+  pivot_longer(everything(), names_to = "variable", values_to = "n_NA") %>% 
+  filter(n_NA > 0) %>% 
+  arrange(desc(n_NA))
+
+# Ver si los NAs están agrupados temporalmente
+d %>% select(Date, Acatenella, PAR_total, kd, Tw, Ciliados, NH4, Wmean) %>% 
+  arrange(Date) %>% 
+  print(n = Inf)
+
+# filtrar NA de Acatenella 
+d <- d %>% filter(!is.na(Acatenella)) 
+
+# Interpolacion de NA
+
+library(zoo)
+
+d_modelo <- d %>%
+  arrange(Date) %>%
+  
+  # 1. Filtrar filas sin Acatenella
+  filter(!is.na(Acatenella)) %>%
+  
+  # 2. Interpolar Tw (6 NAs en marzo-abril 2022, todos internos)
+  mutate(Tw = zoo::na.approx(Tw, 
+                             x = as.numeric(Date), 
+                             na.rm = FALSE),
+        Tw = zoo::na.fill(Tw, "extend")) %>%  
+  
+  # 3. Interpolar NH4 (1 NA al final → extender último valor)
+  mutate(NH4 = zoo::na.approx(NH4, 
+                              x = as.numeric(Date), 
+                              na.rm = FALSE),
+         NH4 = zoo::na.fill(NH4, "extend"))
+
+# Verificar
+d_modelo %>%
+  select(Date, Acatenella, PAR_total, kd, Tw, Ciliados, NH4, Wmean) %>%
+  summarise(across(everything(), ~sum(is.na(.))))
+
+library(ggplot2)
+# Verificar visualmente la interpolación de Tw
+# Comparar original vs interpolado
+bind_rows(
+  d %>% filter(!is.na(Acatenella)) %>% 
+    select(Date, Tw) %>% mutate(origen = "original"),
+  d_modelo %>% 
+    select(Date, Tw) %>% mutate(origen = "interpolado")
+) %>%
+  ggplot(aes(x = Date, y = Tw, color = origen, linetype = origen)) +
+  geom_line() +
+  geom_point(data = d %>% filter(!is.na(Acatenella), is.na(Tw)),  # marcar NAs originales
+             aes(x = Date, y = 8), shape = 4, size = 3, 
+             color = "red", inherit.aes = FALSE) +
+  labs(title = "Interpolación de Tw", 
+       subtitle = "X rojo = posición de NAs originales",
+       x = "Fecha", y = "Temperatura agua (°C)")
+
+####### Alexandrium
+#
+# Crear la matriz de gráficos bivariados 
+#
+ggpairs(d_modelo %>% select(Acatenella,PAR_total,Cla,Si,kd,Wmean,NH4,N,P,Zeu,Tw,sigma,Ciliados,SAM_int,ENSO_int), 
+        upper = list(continuous = wrap("cor", size = 3)),
+        lower = list(continuous = wrap("points", size = 1), combo = wrap("smooth", size = 1))
+)
+
+
+
+
+require(tidyverse)
+ggplot(d_modelo, aes(x = Date, y = log(Acatenella))) +
+  geom_point() +
+  geom_smooth(method = "gam", formula = y ~ s(x), method.args = list(select = TRUE), 
+              aes(color = Area), se = FALSE) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+require(mgcv)
+require(gratia)
+
+# Con tiempo como smooth - con lag
+#
+# PAR  + kd + Wmean + Tw + Ci + NH4 + SAM + ENSO 
+#
+nor13_lag <- gam(log(Acatenella+1)~ s(lag(PAR_total), bs = "tp", k = 6) 
+             + s(lag(kd),bs = "tp", k = 6)
+             + s(lag(Tw),bs = "tp", k = 6)
+             + s(lag(Ciliados),bs = "tp", k = 6)
+             + s(lag(NH4),bs = "tp", k = 6)
+             + s(lag(Wmean),bs = "tp", k = 6)
+             + s(SAM_int,bs = "tp", k = 6)
+#             + s(ENSO_int,bs = "tp", k = 6)
+             + s(as.numeric(Date), bs = "cr", k = 8),
+             , data=d_modelo,method="REML" )
+draw(nor13_lag,residuals=T)
+appraise(nor13_lag)
+summary(nor13_lag)
+
+# El modelo con lag explica menos que el modelo sin lag --> solamente kd significativo
+
+# Concurvity - Colinearidad no lineal
+#
+concurvity(nor13_lag, full = FALSE)$estimate %>% 
+  round(3) %>% 
+  as.data.frame()
+
+# Con tiempo como smooth - sin lag
+#
+# PAR  + kd + Wmean + Tw + Ci + NH4 + SAM + ENSO 
+#
+nor13 <- gam(log(Acatenella+1)~ s(PAR_total, bs = "tp", k = 6) 
+             + s(kd,bs = "tp", k = 6)
+             + s(Tw,bs = "tp", k = 6)
+             + s(Ciliados,bs = "tp", k = 6)
+             + s(NH4,bs = "tp", k = 6)
+             + s(Wmean,bs = "tp", k = 6)
+             + s(SAM_int,bs = "tp", k = 6)
+#             + s(ENSO_int,bs = "tp", k = 6)           Concurvity con Date > 0.9
+             + s(as.numeric(Date), bs = "cr", k = 8),
+             , data=d_modelo,method="REML" )
+draw(nor13,residuals=T)
+
+appraise(nor13)
+summary(nor13)
+AIC(nor13, nor13_lag)
+# QQ Plot — Casi aceptable, un outlier problemático
+# 
+# La mayoría de los puntos siguen la línea roja bien
+# Un punto en la cola inferior izquierda (~-3) se desvía claramente → es el bloom de marzo 2022 transformado, que sigue siendo influyente
+# El resto sugiere que log(x+1) normalizó bien la distribución
+# 
+# Residuos vs predictor lineal — Patrón en U invertida
+# 
+# Para predictor ~0-2.5 los residuos son positivos
+# Para predictor ~2.5-7.5 los residuos bajan y son negativos
+# Luego suben levemente
+# Sugiere heterocedasticidad moderada — el modelo no captura igual de bien los ceros que los valores altos
+# 
+# Histograma — Aceptable pero asimétrico
+# 
+# Sesgado a la izquierda por el outlier
+# El grueso de residuos está centrado en 0, lo cual es bueno
+# 
+# Observed vs Fitted — El mejor panel
+# 
+# Relación razonablemente lineal entre observados y predichos
+# Los ceros (observado = 0, fitted ≈ 0) están bien capturados
+
+# 1. Identificar el outlier influyente
+d_modelo$residuos <- residuals(nor13)
+d_modelo %>% 
+  select(Date, Acatenella, residuos) %>% 
+  arrange(residuos) %>% 
+  head(5)
+
+
+# Para los smooths de variables predictoras se utilizo "tp" thin plates y para el tiempo se 
+# utilizó "cr" cubic splines porque son más estables en los extremos.
+
+acf(residuals(nor13), main = "ACF residuos")
+
+#
+# se evaluó la autocorrelación temporal de los residuos mediante ACF y 
+# no se encontró correlación significativa en ningún lag, lo que indica que 
+# el smooth de tiempo s(Date, bs="cr") capturó adecuadamente la estructura 
+# temporal de los datos, haciendo innecesario el uso de modelos mixtos 
+# `gamm()` con estructura de correlación AR.
+
+
+
+# 3. Chequear concurvidad (problema común con muchos smooths)
+# Concurvity can be viewed as a generalization of co-linearity, 
+# and causes similar problems of interpretation. It can also make estimates 
+# somewhat unstable (so that they become sensitive to apparently innocuous modelling details).
+#
+concurvity(nor13, full = FALSE)$estimate %>% 
+  round(3) %>% 
+  as.data.frame()
+
+# Hay que eliminar ENSO concurvity con Date > 0.9
+
+# Checking smooth basis dimension (k)
+k.check(nor13)
+
+
+AIC(nor13, nor13_lag) %>%
+  rownames_to_column("modelo") %>%
+  arrange(AIC) %>%
+  knitr::kable(caption = "Comparación de modelos por AIC", digits = 2)
+
+
