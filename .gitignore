@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# LibreOffice / MS Office lock files
+~$*
+.~lock.*#
+
+# R
+*.Rout
